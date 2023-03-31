@@ -427,7 +427,7 @@ impl TaskControlBlock {
             return Err(MmapResult::StartNotAlign);
         }
         let end_va = VirtAddr::from(start + len);
-        let inner = self.inner.exclusive_access();
+        let mut inner = self.inner.exclusive_access();
         if let Some(_) = inner.memory_set.areas.iter().find(|area| {
             area.vpn_range.get_start() < end_va.ceil()
                 && area.vpn_range.get_end() > start_va.floor()
@@ -452,7 +452,6 @@ impl TaskControlBlock {
         if port & 0x7 == 0 {
             return Err(MmapResult::PortAllZero);
         }
-        let mut inner = self.inner.exclusive_access();
         if let Err(x) = inner
             .memory_set
             .insert_framed_area(start_va, end_va, permission)
