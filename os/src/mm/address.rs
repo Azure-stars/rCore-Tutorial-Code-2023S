@@ -213,6 +213,7 @@ where
     l: T,
     r: T,
 }
+// 左闭右开
 impl<T> SimpleRange<T>
 where
     T: StepByOne + Copy + PartialEq + PartialOrd + Debug,

@@ -1,17 +1,18 @@
 //! Types related to task management & Functions for completely changing TCB
-use super::TaskContext;
-use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
-use crate::sync::UPSafeCell;
-use crate::trap::{trap_handler, TrapContext};
-use alloc::sync::{Arc, Weak};
-use alloc::vec::Vec;
 use core::cell::RefMut;
 
-/// Task control block structure
-///
-/// Directly save the contents that will not change during running
+use alloc::collections::BTreeMap;
+use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
+
+use super::TaskContext;
+use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
+use crate::config::{MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
+use crate::mm::{MapPermission, MemorySet, PhysPageNum, VirtAddr, VirtPageNum, KERNEL_SPACE};
+use crate::sync::UPSafeCell;
+use crate::syscall::process::MmapResult;
+use crate::trap::{trap_handler, TrapContext};
+/// The task control block (TCB) of a task.
 pub struct TaskControlBlock {
     // Immutable
     /// Process identifier
@@ -68,6 +69,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Start time
+    pub start_time: usize,
+
+    /// syscall_time
+    pub syscall_time: BTreeMap<usize, u32>,
 }
 
 impl TaskControlBlockInner {
@@ -118,6 +125,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    start_time: 0,
+                    syscall_time: BTreeMap::new(),
                 })
             },
         };
@@ -191,6 +200,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    start_time: 0, // 新任务的时间从0开始
+                    syscall_time: BTreeMap::new(),
                 })
             },
         });
@@ -235,6 +246,87 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+    /// 应当为起点start新建一个逻辑段
+    /// 首先查找[start, start + len) 是否在某一个逻辑段中
+    /// 如果分配失败，返回虚拟页对应的实际编码
+    pub fn mmap(&self, start: usize, len: usize, port: usize) -> Result<(), MmapResult> {
+        let start_va = VirtAddr::from(start);
+        if start_va.page_offset() != 0 {
+            return Err(MmapResult::StartNotAlign);
+        }
+        let end_va = VirtAddr::from(start + len);
+        let inner = self.inner.exclusive_access();
+        if let Some(_) = inner.memory_set.areas.iter().find(|area| {
+            area.vpn_range.get_start() < end_va.ceil()
+                && area.vpn_range.get_end() > start_va.floor()
+        }) {
+            // 注意ceil和大小关系
+            // 已经分配了物理页帧
+            return Err(MmapResult::PageMapped);
+        }
+        let mut permission = MapPermission::U;
+        if port & 0x1 != 0 {
+            permission |= MapPermission::R;
+        }
+        if port & 0x2 != 0 {
+            permission |= MapPermission::W;
+        }
+        if port & 0x4 != 0 {
+            permission |= MapPermission::X;
+        }
+        if port & !0x7 != 0 {
+            return Err(MmapResult::PortNotZero);
+        }
+        if port & 0x7 == 0 {
+            return Err(MmapResult::PortAllZero);
+        }
+        let mut inner = self.inner.exclusive_access();
+        if let Err(x) = inner
+            .memory_set
+            .insert_framed_area(start_va, end_va, permission)
+        {
+            if x == VirtPageNum(0) {
+                return Err(MmapResult::OotOfMemory);
+            }
+            return Err(MmapResult::PageMapped);
+        }
+        Ok(())
+    }
+
+    /// 将[start, start+len)的部分解映射
+    /// 可能会生成两个新的area
+    pub fn munmap(&self, start: usize, len: usize) -> Result<(), MmapResult> {
+        let start_va = VirtAddr::from(start);
+        if start_va.page_offset() != 0 {
+            return Err(MmapResult::StartNotAlign);
+        }
+        let end_va = VirtAddr::from(start + len);
+        let mut inner = self.inner.exclusive_access();
+        inner.memory_set.split(start_va, end_va)
+    }
+
+    /// record the syscall time
+    pub fn set_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let count = inner.syscall_time.entry(syscall_id).or_insert(0);
+        *count += 1;
+    }
+
+    /// get the syscall time
+    pub fn get_syscall_time(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        let mut data = [0 as u32; MAX_SYSCALL_NUM];
+        for (key, val) in inner.syscall_time.iter() {
+            data[*key] = *val;
+        }
+        data
+    }
+
+    /// Get the status and time
+    pub fn get_current_status_and_time(&self) -> (TaskStatus, usize) {
+        let inner = self.inner.exclusive_access();
+        (inner.task_status, inner.start_time)
     }
 }
 

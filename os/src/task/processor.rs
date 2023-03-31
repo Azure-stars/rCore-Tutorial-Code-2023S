@@ -7,6 +7,7 @@
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::config::MAX_SYSCALL_NUM;
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
@@ -84,6 +85,47 @@ pub fn take_current_task() -> Option<Arc<TaskControlBlock>> {
 /// Get a copy of the current task
 pub fn current_task() -> Option<Arc<TaskControlBlock>> {
     PROCESSOR.exclusive_access().current()
+}
+
+pub fn set_syscall(syscall_id: usize) {
+    if let Some(task) = PROCESSOR.exclusive_access().current() {
+        task.set_syscall(syscall_id);
+    }
+}
+
+pub fn get_syscall_time() -> [u32; MAX_SYSCALL_NUM] {
+    if let Some(task) = PROCESSOR.exclusive_access().current() {
+        task.get_syscall_time()
+    } else {
+        [0; MAX_SYSCALL_NUM]
+    }
+}
+
+pub fn get_current_status_and_time() -> (TaskStatus, usize) {
+    if let Some(task) = PROCESSOR.exclusive_access().current() {
+        return task.get_current_status_and_time();
+    }
+    panic!("Error when get the task!");
+}
+
+pub fn mmap(start: usize, len: usize, port: usize) -> isize {
+    if let Some(task) = PROCESSOR.exclusive_access().current() {
+        if task.mmap(start, len, port).is_err() {
+            return -1;
+        }
+        return 0;
+    }
+    -1
+}
+
+pub fn munmap(start: usize, len: usize) -> isize {
+    if let Some(task) = PROCESSOR.exclusive_access().current() {
+        if task.munmap(start, len).is_err() {
+            return -1;
+        }
+        return 0;
+    }
+    -1
 }
 
 /// Get the current user token(addr of page table)
