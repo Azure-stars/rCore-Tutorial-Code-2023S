@@ -16,6 +16,7 @@
 //!
 //! We then call [`task::run_tasks()`] and for the first time go to
 //! userspace.
+#![feature(const_trait_impl)]
 #![feature(drain_filter)]
 #![deny(warnings)]
 #![no_std]
