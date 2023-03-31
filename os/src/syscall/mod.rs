@@ -57,10 +57,10 @@ pub mod process;
 use fs::*;
 use process::*;
 
-use crate::task::processor::set_syscall;
+use crate::{fs::Stat, task::processor::set_syscall};
 
 /// handle syscall exception with `syscall_id` and other arguments
-pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
+pub fn syscall(syscall_id: usize, args: [usize; 4]) -> isize {
     // modify: set the syscall
     set_syscall(syscall_id);
     match syscall_id {
