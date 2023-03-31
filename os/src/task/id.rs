@@ -48,6 +48,7 @@ lazy_static! {
 }
 
 /// Abstract structure of PID
+#[derive(Clone)]
 pub struct PidHandle(pub usize);
 
 impl Drop for PidHandle {
@@ -76,11 +77,14 @@ pub struct KernelStack(pub usize);
 pub fn kstack_alloc() -> KernelStack {
     let kstack_id = KSTACK_ALLOCATOR.exclusive_access().alloc();
     let (kstack_bottom, kstack_top) = kernel_stack_position(kstack_id);
-    KERNEL_SPACE.exclusive_access().insert_framed_area(
-        kstack_bottom.into(),
-        kstack_top.into(),
-        MapPermission::R | MapPermission::W,
-    );
+    KERNEL_SPACE
+        .exclusive_access()
+        .insert_framed_area(
+            kstack_bottom.into(),
+            kstack_top.into(),
+            MapPermission::R | MapPermission::W,
+        )
+        .unwrap();
     KernelStack(kstack_id)
 }
 

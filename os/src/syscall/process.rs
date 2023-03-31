@@ -8,26 +8,42 @@ use crate::{
     mm::{translated_refmut, translated_str},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
+        processor::{get_current_status_and_time, get_syscall_time, mmap, munmap},
         suspend_current_and_run_next, TaskStatus,
     },
+    timer::get_time_us,
 };
 
+/// The time struct
 #[repr(C)]
 #[derive(Debug)]
 pub struct TimeVal {
+    /// 秒级别
     pub sec: usize,
+    /// 除去秒级别的时间后剩下的时间
     pub usec: usize,
 }
 
+/// The result of Mmap syscall
+pub enum MmapResult {
+    StartNotAlign,
+    PortNotZero,
+    PortAllZero,
+    PageMapped,
+    OotOfMemory,
+    PageNotMapped,
+}
 /// Task information
 #[allow(dead_code)]
+#[derive(Clone, Copy)]
 pub struct TaskInfo {
     /// Task status in it's life cycle
-    status: TaskStatus,
+    /// If add it, then the status field in task inner will be removed
+    pub status: TaskStatus,
     /// The numbers of syscall called by task
-    syscall_times: [u32; MAX_SYSCALL_NUM],
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
     /// Total running time of task
-    time: usize,
+    pub time: usize,
 }
 
 pub fn sys_exit(exit_code: i32) -> ! {
@@ -122,7 +138,12 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
         "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let us = get_time_us();
+    *translated_refmut(current_user_token(), _ts) = TimeVal {
+        sec: us / 1000000,
+        usec: us % 1000000,
+    };
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
@@ -133,25 +154,38 @@ pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
         "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let now_us = get_time_us();
+    let (now_status, start_time) = get_current_status_and_time();
+    // 以ms为单位
+    if now_status != TaskStatus::Running {
+        return -1;
+    }
+    let syscall_times = get_syscall_time();
+    let interval = (now_us - start_time) / 1000;
+    // unsafe {
+    //     *_ti = TaskInfo {
+    //         status: now_status,
+    //         syscall_times,
+    //         time: interval,
+    //     }
+    // }
+    *translated_refmut(current_user_token(), _ti) = TaskInfo {
+        status: now_status,
+        syscall_times,
+        time: interval,
+    };
+    0
 }
 
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    mmap(_start, _len, _port)
 }
 
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    // let now_result: MmmpResult;
+    munmap(_start, _len)
 }
 
 /// change data segment size
@@ -167,18 +201,30 @@ pub fn sys_sbrk(size: i32) -> isize {
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
 pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let path = translated_str(token, _path);
+    if let Some(data) = get_app_data_by_name(path.as_str()) {
+        let task = current_task().unwrap();
+        let new_task = task.spawn(data);
+        let new_pid = new_task.pid.0;
+        add_task(new_task);
+        new_pid as isize
+    } else {
+        // 文件名无效
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
 pub fn sys_set_priority(_prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
+    if _prio <= 1 {
+        return -1;
+    }
+
     -1
 }

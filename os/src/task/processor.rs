@@ -4,9 +4,12 @@
 //! the current running state of CPU is recorded,
 //! and the replacement and transfer of control flow of different applications are executed.
 
+use core::cmp::Reverse;
+
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::config::MAX_SYSCALL_NUM;
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
@@ -55,11 +58,12 @@ lazy_static! {
 pub fn run_tasks() {
     loop {
         let mut processor = PROCESSOR.exclusive_access();
-        if let Some(task) = fetch_task() {
+        if let Some(Reverse(task)) = fetch_task() {
             let idle_task_cx_ptr = processor.get_idle_task_cx_ptr();
             // access coming task TCB exclusively
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
+            task_inner.stride += task_inner.pass;
             task_inner.task_status = TaskStatus::Running;
             // release coming task_inner manually
             drop(task_inner);
@@ -84,6 +88,44 @@ pub fn take_current_task() -> Option<Arc<TaskControlBlock>> {
 /// Get a copy of the current task
 pub fn current_task() -> Option<Arc<TaskControlBlock>> {
     PROCESSOR.exclusive_access().current()
+}
+
+pub fn set_syscall(syscall_id: usize) {
+    if let Some(task) = PROCESSOR.exclusive_access().current() {
+        task.set_syscall(syscall_id);
+    }
+}
+
+pub fn get_syscall_time() -> [u32; MAX_SYSCALL_NUM] {
+    let task = current_task().unwrap();
+    task.get_syscall_time()
+}
+
+pub fn set_priority(prio: isize) -> isize {
+    let task = current_task().unwrap();
+    task.sys_set_priority(prio);
+    return 0;
+}
+
+pub fn get_current_status_and_time() -> (TaskStatus, usize) {
+    let task = current_task().unwrap();
+    return task.get_current_status_and_time();
+}
+
+pub fn mmap(start: usize, len: usize, port: usize) -> isize {
+    let task = current_task().unwrap();
+    if task.mmap(start, len, port).is_err() {
+        return -1;
+    }
+    return 0;
+}
+
+pub fn munmap(start: usize, len: usize) -> isize {
+    let task = current_task().unwrap();
+    if task.munmap(start, len).is_err() {
+        return -1;
+    }
+    return 0;
 }
 
 /// Get the current user token(addr of page table)
