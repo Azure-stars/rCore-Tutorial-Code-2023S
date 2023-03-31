@@ -2,10 +2,11 @@
 use super::TaskContext;
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{
-    kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
+    kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, VirtPageNum,
+    KERNEL_SPACE,
 };
+use crate::syscall::process::MmapResult;
 use crate::trap::{trap_handler, TrapContext};
-
 /// The task control block (TCB) of a task.
 pub struct TaskControlBlock {
     /// Save task context
@@ -28,6 +29,9 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Start time
+    pub start_time: usize,
 }
 
 impl TaskControlBlock {
@@ -50,11 +54,14 @@ impl TaskControlBlock {
         let task_status = TaskStatus::Ready;
         // map a kernel-stack in kernel space
         let (kernel_stack_bottom, kernel_stack_top) = kernel_stack_position(app_id);
-        KERNEL_SPACE.exclusive_access().insert_framed_area(
-            kernel_stack_bottom.into(),
-            kernel_stack_top.into(),
-            MapPermission::R | MapPermission::W,
-        );
+        KERNEL_SPACE
+            .exclusive_access()
+            .insert_framed_area(
+                kernel_stack_bottom.into(),
+                kernel_stack_top.into(),
+                MapPermission::R | MapPermission::W,
+            )
+            .unwrap();
         let task_control_block = Self {
             task_status,
             task_cx: TaskContext::goto_trap_return(kernel_stack_top),
@@ -63,6 +70,7 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            start_time: 0,
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +103,61 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+    /// 应当为起点start新建一个逻辑段
+    /// 首先查找[start, start + len) 是否在某一个逻辑段中
+    /// 如果分配失败，返回虚拟页对应的实际编码
+    pub fn mmap(&mut self, start: usize, len: usize, port: usize) -> Result<(), MmapResult> {
+        let start_va = VirtAddr::from(start);
+        if start_va.page_offset() != 0 {
+            return Err(MmapResult::StartNotAlign);
+        }
+        let end_va = VirtAddr::from(start + len);
+        if let Some(_) = self.memory_set.areas.iter().find(|area| {
+            area.vpn_range.get_start() < end_va.ceil()
+                && area.vpn_range.get_end() > start_va.floor()
+        }) {
+            // 注意ceil和大小关系
+            // 已经分配了物理页帧
+            return Err(MmapResult::PageMapped);
+        }
+        let mut permission = MapPermission::U;
+        if port & 0x1 != 0 {
+            permission |= MapPermission::R;
+        }
+        if port & 0x2 != 0 {
+            permission |= MapPermission::W;
+        }
+        if port & 0x4 != 0 {
+            permission |= MapPermission::X;
+        }
+        if port & !0x7 != 0 {
+            return Err(MmapResult::PortNotZero);
+        }
+        if port & 0x7 == 0 {
+            return Err(MmapResult::PortAllZero);
+        }
+        if let Err(x) = self
+            .memory_set
+            .insert_framed_area(start_va, end_va, permission)
+        {
+            if x == VirtPageNum(0) {
+                return Err(MmapResult::OotOfMemory);
+            }
+            return Err(MmapResult::PageMapped);
+        }
+        Ok(())
+    }
+
+    /// 将[start, start+len)的部分解映射
+    /// 可能会生成两个新的area
+    pub fn munmap(&mut self, start: usize, len: usize) -> Result<(), MmapResult> {
+        let start_va = VirtAddr::from(start);
+        if start_va.page_offset() != 0 {
+            return Err(MmapResult::StartNotAlign);
+        }
+        let end_va = VirtAddr::from(start + len);
+        self.memory_set.split(start_va, end_va)
     }
 }
 
