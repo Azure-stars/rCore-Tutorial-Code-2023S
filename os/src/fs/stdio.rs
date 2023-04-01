@@ -1,4 +1,6 @@
 //!Stdin & Stdout
+use alloc::string::ToString;
+
 use super::File;
 use crate::mm::UserBuffer;
 use crate::sbi::console_getchar;
@@ -39,6 +41,9 @@ impl File for Stdin {
     fn write(&self, _user_buf: UserBuffer) -> usize {
         panic!("Cannot write to stdin!");
     }
+    fn name(&self) -> alloc::string::String {
+        "Stdin".to_string()
+    }
 }
 
 impl File for Stdout {
@@ -56,5 +61,8 @@ impl File for Stdout {
             print!("{}", core::str::from_utf8(*buffer).unwrap());
         }
         user_buf.len()
+    }
+    fn name(&self) -> alloc::string::String {
+        "Stdout".to_string()
     }
 }

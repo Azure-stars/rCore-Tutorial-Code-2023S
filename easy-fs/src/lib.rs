@@ -1,6 +1,5 @@
 //!An easy file system isolated from the kernel
 #![no_std]
-#![deny(missing_docs)]
 extern crate alloc;
 mod bitmap;
 mod block_cache;
@@ -14,5 +13,6 @@ use bitmap::Bitmap;
 use block_cache::{block_cache_sync_all, get_block_cache};
 pub use block_dev::BlockDevice;
 pub use efs::EasyFileSystem;
+pub use layout::DiskInodeType;
 use layout::*;
 pub use vfs::Inode;

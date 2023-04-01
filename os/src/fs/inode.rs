@@ -8,8 +8,9 @@ use super::File;
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
-use alloc::sync::Arc;
+use alloc::string::ToString;
 use alloc::vec::Vec;
+use alloc::{string::String, sync::Arc};
 use bitflags::*;
 use easy_fs::{EasyFileSystem, Inode};
 use lazy_static::*;
@@ -24,17 +25,24 @@ pub struct OSInode {
 }
 /// The OS inode inner in 'UPSafeCell'
 pub struct OSInodeInner {
+    name: String,
     offset: usize,
     inode: Arc<Inode>,
 }
 
 impl OSInode {
     /// create a new inode in memory
-    pub fn new(readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
+    pub fn new(name: &str, readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
         Self {
             readable,
             writable,
-            inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode }) },
+            inner: unsafe {
+                UPSafeCell::new(OSInodeInner {
+                    name: name.to_string(),
+                    offset: 0,
+                    inode,
+                })
+            },
         }
     }
     /// read all data from the inode
@@ -107,21 +115,37 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
         if let Some(inode) = ROOT_INODE.find(name) {
             // clear size
             inode.clear();
-            Some(Arc::new(OSInode::new(readable, writable, inode)))
+            Some(Arc::new(OSInode::new(name, readable, writable, inode)))
         } else {
             // create file
             ROOT_INODE
                 .create(name)
-                .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
+                .map(|inode| Arc::new(OSInode::new(name, readable, writable, inode)))
         }
     } else {
         ROOT_INODE.find(name).map(|inode| {
             if flags.contains(OpenFlags::TRUNC) {
                 inode.clear();
             }
-            Arc::new(OSInode::new(readable, writable, inode))
+            Arc::new(OSInode::new(name, readable, writable, inode))
         })
     }
+}
+
+pub fn linkat(old_path: &str, new_path: &str) -> isize {
+    ROOT_INODE.linkat(old_path, new_path)
+}
+
+pub fn unlinkat(path: &str) -> isize {
+    ROOT_INODE.unlinkat(path)
+}
+
+pub fn calc_nlink(inode_id: u32) -> u32 {
+    ROOT_INODE.calc_nlink(inode_id)
+}
+
+pub fn find_id_by_name(name: &str) -> Option<Arc<Inode>> {
+    ROOT_INODE.find(name)
 }
 
 impl File for OSInode {
@@ -154,5 +178,11 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn name(&self) -> String {
+        let inner = self.inner.exclusive_access();
+        let name = inner.name.clone();
+        drop(inner);
+        name
     }
 }
