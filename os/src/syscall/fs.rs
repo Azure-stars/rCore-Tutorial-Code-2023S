@@ -3,7 +3,7 @@ use easy_fs::DiskInodeType;
 
 use crate::fs::inode::{calc_nlink, find_id_by_name, linkat, unlinkat};
 use crate::fs::{open_file, OpenFlags, Stat, StatMode};
-use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
+use crate::mm::{translated_byte_buffer, translated_refmut, translated_str, UserBuffer};
 use crate::task::{current_task, current_user_token};
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
@@ -82,29 +82,33 @@ pub fn sys_close(fd: usize) -> isize {
 pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
     let task = current_task().unwrap();
     let inner = task.inner_exclusive_access();
-    if let Some(os_inode) = &inner.fd_table[_fd] {
-        if let Some(inode) = find_id_by_name(os_inode.name().clone().as_str()) {
-            let inode_id = inode.inode_id;
-            let nlink = calc_nlink(inode_id);
-            let mode = match inode.inode_type() {
-                DiskInodeType::File => StatMode::FILE,
-                DiskInodeType::Directory => StatMode::DIR,
-            };
-            unsafe {
-                *_st = Stat {
-                    dev: 0,
-                    ino: inode_id as u64,
-                    mode,
-                    nlink,
-                    pad: [0 as u64; 7],
-                };
-            }
-            return 0;
-        } else {
-            return -1;
-        }
+    if inner.fd_table[_fd].is_none() {
+        return -1;
     }
-    -1
+    let os_inode = inner.fd_table[_fd].as_ref().unwrap();
+    let name = os_inode.name().clone();
+    drop(os_inode);
+    drop(inner);
+    let inode = find_id_by_name(name.as_str());
+    if inode.is_none() {
+        return -1;
+    }
+    let inode = inode.unwrap();
+    let inode_id = inode.inode_id;
+    let nlink = calc_nlink(inode_id);
+    let mode = match inode.inode_type() {
+        DiskInodeType::File => StatMode::FILE,
+        DiskInodeType::Directory => StatMode::DIR,
+    };
+    drop(inode);
+    *translated_refmut(current_user_token(), _st) = Stat {
+        dev: 0,
+        ino: inode_id as u64,
+        mode,
+        nlink,
+        pad: [0 as u64; 7],
+    };
+    return 0;
 }
 
 /// YOUR JOB: Implement linkat.

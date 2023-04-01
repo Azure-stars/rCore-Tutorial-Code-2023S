@@ -154,11 +154,14 @@ impl Inode {
     pub fn linkat(&self, old_path: &str, new_path: &str) -> isize {
         // 注意：不需要重新分配块，只需要添加目录项即可
         // new_path对应的新的目录项的inode_id是old_path对应的inode的id
-        let _fs = self.fs.lock();
-        self.modify_disk_inode(|root_inode| {
+        let mut fs = self.fs.lock();
+        let val = self.modify_disk_inode(|root_inode| {
             if let Some(old_id) = self.find_inode_id(old_path, &root_inode) {
                 let new_dirent = DirEntry::new(new_path, old_id);
                 let file_count = (root_inode.size as usize) / DIRENT_SZ;
+                let new_size = (file_count + 1) * DIRENT_SZ;
+                // increase size
+                self.increase_size(new_size as u32, root_inode, &mut fs);
                 root_inode.write_at(
                     file_count * DIRENT_SZ,
                     new_dirent.as_bytes(),
@@ -169,14 +172,16 @@ impl Inode {
                 // 旧文件不存在
                 return -1;
             }
-        })
+        });
+        block_cache_sync_all();
+        val
     }
     /// unlink the link to a inode
     pub fn unlinkat(&self, path: &str) -> isize {
         // 不考虑目录项的内存的回收，开摆！
-        let fs = self.fs.lock();
+        let mut fs = self.fs.lock();
         // 直接把目录项的内容清空即可
-        self.modify_disk_inode(|root_inode| {
+        let val = self.modify_disk_inode(|root_inode| {
             let file_count = (root_inode.size as usize) / DIRENT_SZ;
             let mut dirent = DirEntry::empty();
             let mut dirent_id: isize = -1;
@@ -200,21 +205,51 @@ impl Inode {
                 [0 as u8; DIRENT_SZ].as_slice(),
                 &self.block_device,
             );
-            // 检查当前的inode是否已经没有文件了
-            if self.find_inode_id(path, &root_inode).is_none() {
-                // 释放inode对应的内存
-                let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
-                let new_inode = Self::new(
-                    block_id,
-                    block_offset,
-                    self.fs.clone(),
-                    self.block_device.clone(),
-                    inode_id,
+            // 检查当前的inode_id是否已经没有链接项了
+            // if self.find_inode_id(path, &root_inode).is_none() {
+            //     // 释放inode对应的内存
+            //     let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
+            //     let new_inode = Self::new(
+            //         block_id,
+            //         block_offset,
+            //         self.fs.clone(),
+            //         self.block_device.clone(),
+            //         inode_id,
+            //     );
+            //     new_inode.clear();
+            // }
+            for i in 0..file_count {
+                assert_eq!(
+                    root_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
                 );
-                new_inode.clear();
+                if dirent.inode_id() == inode_id && dirent.name() != "" {
+                    return 0;
+                }
             }
+            // 若可以运行到这里，说明没有链接项
+            let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
+            let new_inode = Self::new(
+                block_id,
+                block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+                inode_id,
+            );
+            // 不可以直接调用clear函数，重复申请fs导致死锁
+            new_inode.modify_disk_inode(|disk_inode| {
+                let size = disk_inode.size;
+                let data_blocks_dealloc = disk_inode.clear_size(&new_inode.block_device);
+                assert!(data_blocks_dealloc.len() == DiskInode::total_blocks(size) as usize);
+                for data_block in data_blocks_dealloc.into_iter() {
+                    fs.dealloc_data(data_block);
+                }
+            });
             return 0;
-        })
+        });
+
+        block_cache_sync_all();
+        val
     }
     /// calc the nlink of the inode
     pub fn calc_nlink(&self, inode_id: u32) -> u32 {
@@ -274,6 +309,7 @@ impl Inode {
         let mut fs = self.fs.lock();
         self.modify_disk_inode(|disk_inode| {
             let size = disk_inode.size;
+
             let data_blocks_dealloc = disk_inode.clear_size(&self.block_device);
             assert!(data_blocks_dealloc.len() == DiskInode::total_blocks(size) as usize);
             for data_block in data_blocks_dealloc.into_iter() {
