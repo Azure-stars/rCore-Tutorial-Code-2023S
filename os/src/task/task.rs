@@ -65,6 +65,7 @@ impl TaskControlBlock {
         let trap_cx_ppn = res.trap_cx_ppn();
         let kstack = kstack_alloc();
         let kstack_top = kstack.get_top();
+        // 新建线程，更新进程里面的资源数组
         Self {
             process: Arc::downgrade(&process),
             kstack,

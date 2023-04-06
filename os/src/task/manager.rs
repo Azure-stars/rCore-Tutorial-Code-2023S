@@ -11,7 +11,7 @@ use lazy_static::*;
 ///A array of `TaskControlBlock` that is thread-safe
 pub struct TaskManager {
     ready_queue: VecDeque<Arc<TaskControlBlock>>,
-    
+
     /// The stopping task, leave a reference so that the kernel stack will not be recycled when switching tasks
     stop_task: Option<Arc<TaskControlBlock>>,
 }
@@ -50,7 +50,6 @@ impl TaskManager {
         // case) so that we can simply replace it;
         self.stop_task = Some(task);
     }
-
 }
 
 lazy_static! {

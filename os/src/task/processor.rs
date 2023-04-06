@@ -21,6 +21,7 @@ pub struct Processor {
 }
 
 impl Processor {
+    /// new for a processor
     pub fn new() -> Self {
         Self {
             current: None,
@@ -45,6 +46,7 @@ impl Processor {
 }
 
 lazy_static! {
+    /// processor
     pub static ref PROCESSOR: UPSafeCell<Processor> = unsafe { UPSafeCell::new(Processor::new()) };
 }
 
@@ -57,6 +59,7 @@ pub fn run_tasks() {
             let idle_task_cx_ptr = processor.get_idle_task_cx_ptr();
             // access coming task TCB exclusively
             let mut task_inner = task.inner_exclusive_access();
+
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
             // release coming task_inner manually
@@ -82,6 +85,18 @@ pub fn take_current_task() -> Option<Arc<TaskControlBlock>> {
 /// Get a copy of the current task
 pub fn current_task() -> Option<Arc<TaskControlBlock>> {
     PROCESSOR.exclusive_access().current()
+}
+
+/// Get the id of the current task
+pub fn current_task_id() -> usize {
+    let now_process = PROCESSOR.exclusive_access();
+    let now_task = now_process.current.clone().unwrap();
+    let now_task_inner = now_task.inner_exclusive_access();
+    let task_id = now_task_inner.res.as_ref().unwrap().tid;
+    drop(now_task_inner);
+    drop(now_task);
+    drop(now_process);
+    task_id
 }
 
 /// get current process

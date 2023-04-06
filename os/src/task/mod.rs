@@ -13,7 +13,7 @@ mod context;
 mod id;
 mod manager;
 mod process;
-mod processor;
+pub mod processor;
 mod signal;
 mod switch;
 #[allow(clippy::module_inception)]
